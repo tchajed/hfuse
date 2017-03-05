@@ -52,6 +52,7 @@ executable HelloFS
   main-is: HelloFS.hs
   hs-source-dirs: examples
   ghc-options: -threaded
+               -rtsopts
   Default-Language: Haskell2010
 
 source-repository head
