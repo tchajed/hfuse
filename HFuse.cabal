@@ -55,6 +55,18 @@ executable HelloFS
                -rtsopts
   Default-Language: Haskell2010
 
+executable slowfs
+  if flag(developer)
+    buildable: True
+    build-depends:  base >= 4 && < 5, HFuse, unix, options
+  else
+    buildable: False
+  main-is: slowfs.hs
+  hs-source-dirs: examples
+  ghc-options: -threaded
+               -rtsopts
+  Default-Language: Haskell2010
+
 source-repository head
     type:       git
     location:   https://github.com/m15k/hfuse.git
