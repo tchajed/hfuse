@@ -42,6 +42,7 @@ newState = pure State <*> newMVar () <*> RWL.new <*> newIORef 0
 data Operation = Operation
   { computation :: Computation
   , doLock :: Bool
+  , doGlobalRead :: Bool
   , doRWLock :: Bool
   , doUpgrade :: Bool }
 
@@ -52,7 +53,7 @@ doComputation (Alloc n) = allocaBytes n (\_ -> return ())
 doComputation Noop = return ()
 
 doOperation :: Operation -> State -> IO ()
-doOperation (Operation comp doLock doRWLock doUpgrade) s
+doOperation (Operation comp doLock doGlobalRead doRWLock doUpgrade) s
   | doLock = withMVar (lock s) $ \_ -> doComputation comp
   | doRWLock && not doUpgrade = do
       RWL.acquireRead (rwlock s)
@@ -66,6 +67,10 @@ doOperation (Operation comp doLock doRWLock doUpgrade) s
         modifyIORef' (sharedMem s) (+1)
         RWL.releaseWrite (rwlock s)
       else RWL.releaseRead (rwlock s)
+  | doGlobalRead = do
+      r <- readIORef (sharedMem s)
+      doComputation comp
+      return $ r `seq` ()
   | otherwise = doComputation comp
 
 data FsOptions = FsOptions
@@ -73,6 +78,7 @@ data FsOptions = FsOptions
   , ackermann :: Int
   , allocbytes :: Int
   , optGlobalLock :: Bool
+  , optGlobalRead :: Bool
   , optRWLock :: Bool
   , optUpgradeLock :: Bool }
 
@@ -86,6 +92,8 @@ instance Options FsOptions where
        "bytes to allocate"
     <*> simpleOption "lock" False
        "acquire global lock for each operation"
+    <*> simpleOption "global-read" False
+       "read global state for each operation"
     <*> simpleOption "rwlock" False
        "acquire read-write lock for each operation"
     <*> simpleOption "upgrade" False
@@ -103,12 +111,12 @@ parseComputation fibN ackN bytes =
       _ -> Left "multiple computations chosen"
 
 parseOperation :: FsOptions -> Either String Operation
-parseOperation (FsOptions fibN ackN bytes doLock doRWLock doUpgrade)
+parseOperation (FsOptions fibN ackN bytes doLock doGlobalRead doRWLock doUpgrade)
   | doLock && doRWLock = Left "cannot acquire both global and rw lock"
   | doUpgrade && not doRWLock = Left "cannot upgrade without rwlock"
   | otherwise = do
     c <- parseComputation fibN ackN bytes
-    return $ Operation c doLock doRWLock doUpgrade
+    return $ Operation c doLock doGlobalRead doRWLock doUpgrade
 
 main :: IO ()
 main = runCommand $ \opts args -> do
