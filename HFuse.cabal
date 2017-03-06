@@ -19,8 +19,8 @@ flag developer
   default: False
 
 Library
-  Build-Depends:          base >= 4 && < 5, unix, bytestring
-  Exposed-Modules:        System.Fuse
+  Build-Depends:          base >= 4 && < 5, unix, bytestring, concurrent-extra
+  Exposed-Modules:        System.Fuse, Control.Concurrent.ReadWriteLock
   Default-Extensions:             ForeignFunctionInterface ScopedTypeVariables EmptyDataDecls
   Includes:               dirent.h, fuse.h, fcntl.h
   Include-Dirs:           /usr/include, /usr/local/include, .
@@ -58,7 +58,7 @@ executable HelloFS
 executable slowfs
   if flag(developer)
     buildable: True
-    build-depends:  base >= 4 && < 5, HFuse, unix, options, concurrent-extra
+    build-depends:  base >= 4 && < 5, HFuse, unix, options
   else
     buildable: False
   main-is: slowfs.hs

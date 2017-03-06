@@ -12,6 +12,7 @@ import Options
 
 import Foreign.Marshal.Alloc (allocaBytes)
 import Control.Concurrent.MVar
+import Data.IORef
 import Control.Concurrent.ReadWriteLock as RWL
 
 fib :: Int -> Int
@@ -32,15 +33,17 @@ data Computation =
 
 data State = State
   { lock :: MVar ()
-  , rwlock :: RWL.RWLock }
+  , rwlock :: RWL.RWLock
+  , sharedMem :: IORef Int }
 
 newState :: IO State
-newState = pure State <*> newMVar () <*> RWL.new
+newState = pure State <*> newMVar () <*> RWL.new <*> newIORef 0
 
 data Operation = Operation
   { computation :: Computation
   , doLock :: Bool
-  , doRWLock :: Bool }
+  , doRWLock :: Bool
+  , doUpgrade :: Bool }
 
 doComputation :: Computation -> IO ()
 doComputation (Fibonacci n) = fib n `seq` return ()
@@ -49,21 +52,29 @@ doComputation (Alloc n) = allocaBytes n (\_ -> return ())
 doComputation Noop = return ()
 
 doOperation :: Operation -> State -> IO ()
-doOperation (Operation comp doLock doRWLock) s =
-  if doLock then
-    withMVar (lock s) $ \_ -> doComputation comp
-  else
-    if doRWLock then
-      RWL.withRead (rwlock s) $ doComputation comp
-    else
+doOperation (Operation comp doLock doRWLock doUpgrade) s
+  | doLock = withMVar (lock s) $ \_ -> doComputation comp
+  | doRWLock && not doUpgrade = do
+      RWL.acquireRead (rwlock s)
       doComputation comp
+      RWL.acquireRead (rwlock s)
+  | doRWLock && doUpgrade = do
+      RWL.acquireRead (rwlock s)
+      doComputation comp
+      b <- RWL.tryUpgradeRead (rwlock s)
+      if b then do
+        modifyIORef' (sharedMem s) (+1)
+        RWL.releaseWrite (rwlock s)
+      else RWL.releaseRead (rwlock s)
+  | otherwise = doComputation comp
 
 data FsOptions = FsOptions
   { fibonacci :: Int
   , ackermann :: Int
   , allocbytes :: Int
   , optGlobalLock :: Bool
-  , optRWLock :: Bool }
+  , optRWLock :: Bool
+  , optUpgradeLock :: Bool }
 
 instance Options FsOptions where
   defineOptions = pure FsOptions
@@ -77,6 +88,8 @@ instance Options FsOptions where
        "acquire global lock for each operation"
     <*> simpleOption "rwlock" False
        "acquire read-write lock for each operation"
+    <*> simpleOption "upgrade" False
+       "attempt to upgrade read-write lock after each operation"
 
 parseComputation :: Int -> Int -> Int -> Either String Computation
 parseComputation fibN ackN bytes =
@@ -90,12 +103,12 @@ parseComputation fibN ackN bytes =
       _ -> Left "multiple computations chosen"
 
 parseOperation :: FsOptions -> Either String Operation
-parseOperation (FsOptions fibN ackN bytes doLock doRWLock) =
-  if doLock && doRWLock then
-    Left "cannot acquire both global and rw lock"
-  else do
+parseOperation (FsOptions fibN ackN bytes doLock doRWLock doUpgrade)
+  | doLock && doRWLock = Left "cannot acquire both global and rw lock"
+  | doUpgrade && not doRWLock = Left "cannot upgrade without rwlock"
+  | otherwise = do
     c <- parseComputation fibN ackN bytes
-    return $ Operation c doLock doRWLock
+    return $ Operation c doLock doRWLock doUpgrade
 
 main :: IO ()
 main = runCommand $ \opts args -> do
