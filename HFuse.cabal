@@ -58,7 +58,7 @@ executable HelloFS
 executable slowfs
   if flag(developer)
     buildable: True
-    build-depends:  base >= 4 && < 5, HFuse, unix, options
+    build-depends:  base >= 4 && < 5, HFuse, unix, options, concurrent-extra
   else
     buildable: False
   main-is: slowfs.hs

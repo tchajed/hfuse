@@ -12,6 +12,7 @@ import Options
 
 import Foreign.Marshal.Alloc (allocaBytes)
 import Control.Concurrent.MVar
+import Control.Concurrent.ReadWriteLock as RWL
 
 fib :: Int -> Int
 fib 0 = 0
@@ -30,14 +31,16 @@ data Computation =
   | Noop
 
 data State = State
-  { lock :: MVar () }
+  { lock :: MVar ()
+  , rwlock :: RWL.RWLock }
 
 newState :: IO State
-newState = pure State <*> newMVar ()
+newState = pure State <*> newMVar () <*> RWL.new
 
 data Operation = Operation
   { computation :: Computation
-  , doLock :: Bool }
+  , doLock :: Bool
+  , doRWLock :: Bool }
 
 doComputation :: Computation -> IO ()
 doComputation (Fibonacci n) = fib n `seq` return ()
@@ -46,17 +49,21 @@ doComputation (Alloc n) = allocaBytes n (\_ -> return ())
 doComputation Noop = return ()
 
 doOperation :: Operation -> State -> IO ()
-doOperation (Operation comp doLock) s =
+doOperation (Operation comp doLock doRWLock) s =
   if doLock then
     withMVar (lock s) $ \_ -> doComputation comp
   else
-    doComputation comp
+    if doRWLock then
+      RWL.withRead (rwlock s) $ doComputation comp
+    else
+      doComputation comp
 
 data FsOptions = FsOptions
   { fibonacci :: Int
   , ackermann :: Int
   , allocbytes :: Int
-  , optGlobalLock :: Bool }
+  , optGlobalLock :: Bool
+  , optRWLock :: Bool }
 
 instance Options FsOptions where
   defineOptions = pure FsOptions
@@ -68,6 +75,8 @@ instance Options FsOptions where
        "bytes to allocate"
     <*> simpleOption "lock" False
        "acquire global lock for each operation"
+    <*> simpleOption "rwlock" False
+       "acquire read-write lock for each operation"
 
 parseComputation :: Int -> Int -> Int -> Either String Computation
 parseComputation fibN ackN bytes =
@@ -81,9 +90,12 @@ parseComputation fibN ackN bytes =
       _ -> Left "multiple computations chosen"
 
 parseOperation :: FsOptions -> Either String Operation
-parseOperation (FsOptions fibN ackN bytes doLock) = do
-  c <- parseComputation fibN ackN bytes
-  return $ Operation c doLock
+parseOperation (FsOptions fibN ackN bytes doLock doRWLock) =
+  if doLock && doRWLock then
+    Left "cannot acquire both global and rw lock"
+  else do
+    c <- parseComputation fibN ackN bytes
+    return $ Operation c doLock doRWLock
 
 main :: IO ()
 main = runCommand $ \opts args -> do
